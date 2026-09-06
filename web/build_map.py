@@ -85,12 +85,12 @@ FIELD_LABELS = {
     "water_near": "Водоёмы поблизости",
     "park_ha_run": "Парки в радиусе 1,25 км",
     "park_ha_bike": "Парки в радиусе 3,75 км",
-    "dist_park_m": "Пешком до парка от центра гексагона",
-    "dist_water_m": "Пешком до воды от центра гексагона",
-    "dist_train_m": "До электрички",
+    "dist_park_m": "До парка пешком",
+    "dist_water_m": "До воды пешком",
+    "dist_train_m": "До электрички по прямой",
     "train_lines_n": "Веток электрички",
-    "dist_shop_m": "До веломагазина",
-    "dist_repair_m": "До велосервиса",
+    "dist_shop_m": "До веломагазина по прямой",
+    "dist_repair_m": "До велосервиса по прямой",
     "low_stress_pct": "Спокойные улицы",
     "bike_infra_km_r": "Велодорожки в радиусе 3,75 км",
 }
@@ -99,7 +99,7 @@ for _km in KM_OPTIONS["run"]:
 for _km in KM_OPTIONS["bike"]:
     FIELD_LABELS[f"park_ha_bike_{_km}"] = f"Парки в радиусе {radius_label(_km)}"
     FIELD_LABELS[f"bike_infra_km_{_km}"] = f"Велодорожки в радиусе {radius_label(_km)}"
-    FIELD_LABELS[f"dist_train_m_{_km}"] = "До электрички"
+    FIELD_LABELS[f"dist_train_m_{_km}"] = "До электрички по прямой"
     FIELD_LABELS[f"train_lines_n_{_km}"] = "Веток электрички"
 
 RUN_LABELS = [
@@ -765,7 +765,6 @@ def main(out_html: Path | None = None) -> None:
   var SOURCE_ID = "hex";
   var LAYER_ID = "hex-fill";
   var FIELD = { run: "score_run", bike: "score_bike" };
-  var WHY = { run: "why_run", bike: "why_bike" };
   var PROFILE_NAME = { run: "Бег", bike: "Вело" };
   // показатели независимы и в целое не складываются: у улицы обычно есть тротуар
   var MIX = [
@@ -832,12 +831,12 @@ def main(out_html: Path | None = None) -> None:
       "Парки поблизости",
       "Водоёмы поблизости",
       "Парки в радиусе " + r,
-      "Пешком до парка от центра гексагона",
-      "Пешком до воды от центра гексагона"
+      "До парка пешком",
+      "До воды пешком"
     ];
     if (profile === "bike") {
-      if (wantTrain) labels.push("До электрички", "Веток электрички");
-      labels.push("До веломагазина", "До велосервиса", "Спокойные улицы",
+      if (wantTrain) labels.push("До электрички по прямой", "Веток электрички");
+      labels.push("До веломагазина по прямой", "До велосервиса по прямой", "Спокойные улицы",
         "Велодорожки в радиусе " + r);
     }
     return labels;
@@ -927,7 +926,7 @@ def main(out_html: Path | None = None) -> None:
       } else if (t.indexOf("Велодорожки в радиусе") === 0) {
         lab.textContent = "Велодорожки в радиусе " + r;
         if (bikeVal) valEl.textContent = bikeVal;
-      } else if (t === "До электрички" && trainVal) {
+      } else if (t.indexOf("До электрички") === 0 && trainVal) {
         valEl.textContent = trainVal;
       } else if (t === "Веток электрички" && linesVal !== "") {
         valEl.textContent = linesVal;
@@ -954,11 +953,9 @@ def main(out_html: Path | None = None) -> None:
     var key = scoreKey();
     var score = lastProps[key] != null ? lastProps[key]
       : (lastProps[FIELD[currentProfile]] != null ? lastProps[FIELD[currentProfile]] : "—");
-    var why = lastProps[WHY[currentProfile]] || "";
     title.innerHTML =
       '<div class="ah-score">' + score + '</div>' +
-      '<div class="ah-profile">' + PROFILE_NAME[currentProfile] + '</div>' +
-      (why ? '<p class="ah-why">' + why + '</p>' : "");
+      '<div class="ah-profile">' + PROFILE_NAME[currentProfile] + '</div>';
   }
 
   function fmtKm(value) {
