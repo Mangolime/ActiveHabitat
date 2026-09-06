@@ -1002,7 +1002,7 @@ def main(out_html: Path | None = None) -> None:
       '<p class="ah-mix-hint">Тротуары — вдоль улиц. Тропы в парках — дорожки внутри парков и леса. Дворы и подъезды не считаем.</p>' +
       rows;
     var content = sidebar.querySelector(".llmaps-sidebar-content");
-    if (routesReady() && hexIsGood() && routesKnown() && !loopsForHex().length) {
+    if (routesReady() && routesKnown() && !loopsForHex().length) {
       box.innerHTML +=
         '<p class="ah-mix-hint">Замкнуть петлю нужной длины здесь не удалось: ' +
         'сетка улиц не даёт круга без длинных повторов.</p>';
@@ -1013,23 +1013,6 @@ def main(out_html: Path | None = None) -> None:
 
   function fmtPct(share) {
     return Math.round(Number(share || 0) * 100) + "%";
-  }
-
-  // Считаем маршруты по всем гексам, а показываем только по «зелёным». Порог
-  // берём из той же шкалы, которой красится карта, а не отдельной константой:
-  // иначе стоит подвинуть перцентиль в пайплайне — и подсказка разъезжается с
-  // цветом. Две верхние ступени из шести — это зелёный и салатовый.
-  function loopThreshold() {
-    var stops = currentStops();
-    if (!stops || stops.length < 3) return -Infinity;
-    return stops[stops.length - 3][0];
-  }
-
-  function hexScore() {
-    if (!lastProps) return NaN;
-    var v = lastProps[scoreKey()];
-    if (v == null) v = lastProps[FIELD[currentProfile] || FIELD.run];
-    return Number(v);
   }
 
   function featKm(p) {
@@ -1045,14 +1028,9 @@ def main(out_html: Path | None = None) -> None:
     return Number(list) === want;
   }
 
-  function hexIsGood() {
-    var s = hexScore();
-    return isFinite(s) && s >= loopThreshold();
-  }
-
   function loopsForHex() {
     var fc = loopHex ? loopCache[loopHex] : null;
-    if (!fc || !fc.features || !hexIsGood() || !routesReady()) return [];
+    if (!fc || !fc.features || !routesReady()) return [];
     var wantKm = Number(currentKm[currentProfile]);
     return fc.features.filter(function (f) {
       return f.properties.profile === currentProfile && featKm(f.properties) === wantKm;
@@ -1278,9 +1256,6 @@ def main(out_html: Path | None = None) -> None:
         : !routesReady()
         ? '<p class="ah-mix-hint">Петли для ' + currentKm[currentProfile] +
           ' км ещё не посчитаны.</p>'
-        : !hexIsGood()
-        ? '<p class="ah-mix-hint">Маршруты показываем только по зелёным гексагонам — ' +
-          'от ' + Math.round(loopThreshold()) + ' баллов. Здесь балл ниже.</p>'
         : '<p class="ah-mix-hint">Замкнуть петлю нужной длины здесь не удалось: ' +
           'сетка улиц не даёт круга без длинных повторов.</p>';
       return;
