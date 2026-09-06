@@ -553,6 +553,9 @@ def main(out_html: Path | None = None) -> None:
   margin-left: 0;
   width: 100%;
 }
+.ah-sheet-handle {
+  display: none;
+}
 .ah-tabs {
   display: flex;
   gap: 3px;
@@ -731,6 +734,7 @@ def main(out_html: Path | None = None) -> None:
     bottom: auto;
     max-width: min(100vw - 24px, 280px);
   }
+  .ah-chrome p { display: none; }
   .llmaps-legend {
     max-width: min(100vw - 24px, 280px);
     font-size: 12px;
@@ -739,6 +743,38 @@ def main(out_html: Path | None = None) -> None:
     bottom: 36px;
   }
   .llmaps-legend-toggle-btn { min-width: 44px; min-height: 44px; }
+  .ah-score { font-size: 32px; }
+  .ah-sheet-handle {
+    display: block;
+    padding: 10px 0 2px;
+    cursor: grab;
+    touch-action: none;
+  }
+  .ah-sheet-handle i {
+    display: block;
+    width: 42px;
+    height: 4px;
+    margin: 0 auto;
+    border-radius: 99px;
+    background: #d1d5db;
+  }
+  .llmaps-sidebar,
+  .llmaps-sidebar.right {
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    height: 42vh !important;
+    max-height: 90vh;
+    border-radius: 18px 18px 0 0;
+    border: 0 !important;
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
+    transform: translateY(110%) !important;
+  }
+  .llmaps-sidebar.open {
+    transform: translateY(0) !important;
+  }
 }
 @media (min-width: 769px) {
   .llmaps-legend { max-width: 280px; }
@@ -1313,6 +1349,37 @@ def main(out_html: Path | None = None) -> None:
     if (content) content.style.display = routesOn ? "none" : "";
   }
 
+  function isPhone() {
+    return window.matchMedia("(max-width: 768px)").matches;
+  }
+
+  function syncSheet() {
+    var sb = document.getElementById("llmaps-sidebar");
+    var open = !!(sb && sb.classList.contains("open"));
+    if (!open && sb) sb.style.height = "";
+  }
+
+  function ensureSheetHandle(sb) {
+    if (!sb || sb.querySelector(".ah-sheet-handle")) return;
+    var h = document.createElement("div");
+    h.className = "ah-sheet-handle";
+    h.innerHTML = "<i></i>";
+    sb.insertBefore(h, sb.firstChild);
+    var startY = 0;
+    var startH = 0;
+    h.addEventListener("pointerdown", function (ev) {
+      if (!isPhone()) return;
+      startY = ev.clientY;
+      startH = sb.getBoundingClientRect().height;
+      h.setPointerCapture(ev.pointerId);
+    });
+    h.addEventListener("pointermove", function (ev) {
+      if (!h.hasPointerCapture(ev.pointerId)) return;
+      var next = Math.max(140, Math.min(window.innerHeight * 0.9, startH + (startY - ev.clientY)));
+      sb.style.height = next + "px";
+    });
+  }
+
   function enhanceSidebar() {
     if (observer) observer.disconnect();
     try {
@@ -1321,10 +1388,12 @@ def main(out_html: Path | None = None) -> None:
       renderMix();
       var sb = document.getElementById("llmaps-sidebar");
       if (sb && sb.classList.contains("open")) {
+        ensureSheetHandle(sb);
         renderRoutes(sb);
         renderTabs(sb);
         applyTab(sb);
       }
+      syncSheet();
     } finally {
       var sidebar = document.getElementById("llmaps-sidebar");
       if (observer && sidebar) {
@@ -1803,7 +1872,9 @@ def main(out_html: Path | None = None) -> None:
       observer.observe(sidebar, { childList: true, subtree: true });
       new MutationObserver(function () {
         if (!sidebar.classList.contains("open")) setHighlight(map, null);
+        syncSheet();
       }).observe(sidebar, { attributes: true, attributeFilter: ["class"] });
+      window.addEventListener("resize", syncSheet);
     }
 
     window.llmapsGetSourceData(SOURCE_ID).then(function (data) {
