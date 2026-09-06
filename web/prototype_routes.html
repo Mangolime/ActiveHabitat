@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ПРОТОТИП · вкладка маршрутов</title>
+<!--
+  ПРОТОТИП, не для продакшена. Дизайн согласован: список с раскрытием, спокойная
+  свёрнутая строка, километры в панели гексагона, единый переключатель профиля в
+  шапке. Осталось перенести это в web/build_map.py.
+
+  Данные настоящие: гекс 8811aa630dfffff, маршруты из web/loops/, покрытия из
+  web/_proto_surface.json. Профиль высоты — ЗАГЛУШКА, рельеф ещё не подключён.
+-->
+<link href="https://unpkg.com/maplibre-gl@5.16.0/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@5.16.0/dist/maplibre-gl.js"></script>
+<style>
+  :root {
+    --ink: #111827;
+    --muted: #6b7280;
+    --line: rgba(229,231,235,.9);
+    --panel: rgba(255,255,255,.84);
+    --r1: #2f7d4f;   /* маршрут 1 — зелёный */
+    --r2: #c94f47;   /* маршрут 2 — красный */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); }
+  #map { position: absolute; inset: 0; }
+
+  /* шапка — как в настоящей карте: профиль живёт здесь и только здесь */
+  .chrome {
+    position: absolute; top: 12px; left: 12px; z-index: 6; max-width: 280px; padding: 10px 12px;
+    background: rgba(255,255,255,.42); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  .chrome h1 { margin: 0 0 3px; font-size: 14px; }
+  .chrome p { margin: 0 0 8px; font-size: 12px; color: rgba(17,24,39,.72); }
+  .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: #fff; }
+  .segmented button { border: 0; background: transparent; font: inherit; padding: 6px 15px; cursor: pointer; color: var(--muted); }
+  .segmented button.on { background: var(--ink); color: #fff; font-weight: 600; }
+
+  .panel {
+    position: absolute; top: 12px; right: 12px; bottom: 12px; width: 376px; z-index: 5;
+    background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.10);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .tabs { display: flex; padding: 7px 7px 0; gap: 3px; border-bottom: 1px solid var(--line); }
+  .tab { flex: 1; padding: 9px 8px; border: 0; background: transparent; cursor: pointer; font: inherit;
+         font-weight: 600; color: var(--muted); border-radius: 9px 9px 0 0; }
+  .tab.on { color: var(--ink); background: rgba(255,255,255,.9); box-shadow: inset 0 -2px 0 var(--ink); }
+  .body { flex: 1; overflow-y: auto; padding: 12px; }
+
+  h2 { margin: 0 0 2px; font-size: 15px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .section { margin-top: 15px; }
+  .section > h3 { margin: 0 0 7px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .kv:last-child { border-bottom: 0; }
+  .kv span:first-child { color: var(--muted); }
+  .kv b { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* единый язык для покрытий и для состава дорог в гексе */
+  .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); }
+  .stack i { display: block; }
+  .keys { display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 7px; font-size: 12px; color: var(--muted); }
+  .keys b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+
+  /* состав дорог: независимые показатели, у каждого своя строка и своя шкала */
+  .mix-row { display: grid; grid-template-columns: 108px 1fr 52px; gap: 8px; align-items: center; margin-bottom: 7px; }
+  .mix-label { color: var(--muted); font-size: 12px; }
+  .mix-track { position: relative; height: 9px; border-radius: 5px; background: rgba(0,0,0,.06); }
+  .mix-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; }
+  .mix-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
+
+  .route { border: 1px solid var(--line); border-left: 4px solid var(--edge); border-radius: 10px;
+           background: rgba(255,255,255,.72); margin-bottom: 8px; overflow: hidden; transition: background .12s; }
+  .route:hover { background: #fff; }
+  .route.sel { border-color: var(--edge); background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.07); }
+  .route-head { display: flex; align-items: center; gap: 10px; padding: 9px 11px; cursor: pointer; }
+  .glyph { flex: none; opacity: .85; }
+  .route-title { font-weight: 600; }
+  .route-sum { color: var(--muted); font-size: 12px; }
+  .chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
+  .route.sel .chev { transform: rotate(90deg); }
+  .route-body { padding: 2px 11px 12px; }
+  .verdict { font-size: 12px; padding: 6px 9px; border-radius: 8px; background: rgba(201,79,71,.09);
+             color: #8a332d; margin-bottom: 9px; }
+  .verdict.ok { background: rgba(47,125,79,.10); color: #1f5c39; }
+
+  /* компактный профиль высоты, разворачивается поверх экрана */
+  .elev { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding: 8px 10px;
+          border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.6); cursor: pointer; }
+  .elev:hover { background: #fff; }
+  .elev .nums { font-size: 12px; color: var(--muted); line-height: 1.3; }
+  .elev .nums b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .elev .grow { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .modal { position: fixed; inset: 0; z-index: 40; background: rgba(17,24,39,.42); display: flex;
+           align-items: center; justify-content: center; padding: 28px; }
+  .modal-card { background: #fff; border-radius: 16px; padding: 20px 22px; width: min(860px, 100%);
+                box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  .modal-card header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .modal-card .close { margin-left: auto; border: 0; background: #f3f4f6; border-radius: 8px; cursor: pointer;
+                       font: inherit; padding: 6px 12px; }
+  .mock { display: inline-block; font-size: 11px; font-weight: 600; color: #92400e; background: #fef3c7;
+          border-radius: 5px; padding: 1px 7px; }
+
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="chrome"></div>
+<div id="ui"></div>
+<div id="modal"></div>
+
+<script>
+const HEX = "8811aa630dfffff";
+const RANK = ["#2f7d4f", "#c94f47", "#1d4ed8", "#9333ea"];
+
+const SURF = {
+  asphalt: { ru: "асфальт", c: "#7c8794" },
+  stone:   { ru: "брусчатка", c: "#c2410c" },
+  soil:    { ru: "грунт", c: "#8B5A2B" }
+};
+const MIX = [
+  { key: "mix_magistral_km", ru: "Магистрали", c: "#c0564e" },
+  { key: "mix_street_km",    ru: "Улицы",      c: "#c9a05b" },
+  { key: "mix_walk_km",      ru: "Тротуары",   c: "#93a3ae" },
+  { key: "mix_path_km",      ru: "Тропы в парках", c: "#4f8a5b" },
+  { key: "mix_bike_km",      ru: "Велодорожки",    c: "#3f7fb5" }
+];
+let routes = [], surface = {}, hexFeat = null, map = null;
+let profile = "run", tab = "hex", selected = null, modalRank = null;
+
+const km = m => (m / 1000).toFixed(2).replace(".", ",") + " км";
+const pct = v => Math.round(v * 100) + "%";
+
+const shown = () => routes.filter(r => r.properties.profile === profile);
+const surfOf = r => (surface[HEX + "|" + r.properties.profile + "|" + r.properties.rank] || {}).share || {};
+const order = o => Object.keys(o).sort((a, b) => o[b] - o[a]);
+
+/* ---------- общие кирпичики ---------- */
+
+function stack(items) {           // items: [{share, color}]
+  return '<div class="stack">' + items.map(i =>
+    `<i style="width:${(i.share * 100).toFixed(1)}%;background:${i.color}"></i>`).join("") + "</div>";
+}
+function keys(items) {            // items: [{label, value, color}]
+  return '<div class="keys">' + items.map(i =>
+    `<span><span class="dot" style="background:${i.color}"></span>${i.label} <b>${i.value}</b></span>`).join("") + "</div>";
+}
+function surfaceBlock(s) {
+  const ks = order(s);
+  return stack(ks.map(k => ({ share: s[k], color: SURF[k].c }))) +
+         keys(ks.map(k => ({ label: SURF[k].ru, value: pct(s[k]), color: SURF[k].c })));
+}
+
+/* крошечный контур петли — по нему видно конфигурацию, даже когда треки наложились */
+function glyph(feat, size, color) {
+  const cs = feat.geometry.coordinates;
+  let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+  const k = Math.cos(cs[0][1] * Math.PI / 180);
+  const pts = cs.map(c => [c[0] * k, c[1]]);
+  pts.forEach(([x, y]) => { minx = Math.min(minx, x); maxx = Math.max(maxx, x); miny = Math.min(miny, y); maxy = Math.max(maxy, y); });
+  const span = Math.max(maxx - minx, maxy - miny) || 1, pad = 2.5, sc = (size - pad * 2) / span;
+  const ox = (size - (maxx - minx) * sc) / 2, oy = (size - (maxy - miny) * sc) / 2;
+  const step = Math.max(1, Math.floor(pts.length / 90));
+  let d = "";
+  for (let i = 0; i < pts.length; i += step) {
+    const x = ox + (pts[i][0] - minx) * sc, y = size - (oy + (pts[i][1] - miny) * sc);
+    d += (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+  }
+  return `<svg class="glyph" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <path d="${d}Z" fill="${color}14" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+}
+
+/* заглушка рельефа: детерминированный профиль из координат маршрута */
+function fakeElev(feat) {
+  const cs = feat.geometry.coordinates, n = Math.min(140, cs.length);
+  const pts = [], seed = feat.properties.rank * 7.3 + (feat.properties.profile === "bike" ? 2.1 : 0);
+  let up = 0, down = 0, prev = null;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const h = 140 + 14 * Math.sin(t * 6.283 * 1.6 + seed) + 8 * Math.sin(t * 6.283 * 4.2 + seed * 2) + 4 * Math.sin(t * 6.283 * 9 + seed);
+    if (prev != null) (h > prev ? up += h - prev : down += prev - h);
+    prev = h; pts.push(h);
+  }
+  return { pts, up: Math.round(up), down: Math.round(down) };
+}
+function elevSvg(e, w, h, color) {
+  const lo = Math.min(...e.pts), hi = Math.max(...e.pts), rng = hi - lo || 1;
+  const d = e.pts.map((v, i) => (i ? "L" : "M") +
+    (i / (e.pts.length - 1) * w).toFixed(1) + " " + (h - (v - lo) / rng * (h - 4) - 2).toFixed(1)).join("");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    <path d="${d}L${w} ${h}L0 ${h}Z" fill="${color}1f"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
+}
+
+/* ---------- панель ---------- */
+
+const fkm = v => v.toFixed(1).replace(".", ",");
+
+/* Показатели независимы и в целое не складываются (у улицы обычно есть тротуар),
+   поэтому не составная полоса, а отдельная строка на каждый тип. */
+function mixRows() {
+  const p = hexFeat ? hexFeat.properties : {};
+  const rows = MIX.map(m => ({ ...m, kmv: Number(p[m.key] || 0) })).sort((a, b) => b.kmv - a.kmv);
+  const scale = Math.max(...rows.map(r => r.kmv)) || 1;
+  return rows.map(r => `<div class="mix-row">
+      <div class="mix-label">${r.ru}</div>
+      <div class="mix-track"><span class="mix-fill" style="width:${r.kmv / scale * 100}%;background:${r.c}"></span></div>
+      <div class="mix-val">${fkm(r.kmv)}</div>
+    </div>`).join("");
+}
+
+function hexPane() {
+  const p = hexFeat ? hexFeat.properties : {};
+  return `<h2>Гексагон</h2><div class="sub">Балл ${profile === "run" ? "бега" : "вело"}:
+      <b>${profile === "run" ? (p.score_run ?? "—") : (p.score_bike ?? "—")}</b></div>
+    <div class="section"><h3>Дороги в гексе, км</h3>
+      ${mixRows()}
+    </div>`;
+}
+
+function routeRow(r) {
+  const p = r.properties, c = RANK[p.rank - 1], on = selected === p.rank;
+  // свёрнутая строка намеренно спокойная: полоса покрытия без легенды нечитаема
+  return `<div class="route ${on ? "sel" : ""}" style="--edge:${c}" data-rank="${p.rank}">
+    <div class="route-head">
+      ${glyph(r, 28, c)}
+      <div><div class="route-title">Маршрут ${p.rank}</div>
+        <div class="route-sum">${km(p.length_m)} · парк ${pct(p.park_m / p.length_m)}</div></div>
+      <span class="chev">›</span></div>
+    ${on ? routeDetail(r) : ""}</div>`;
+}
+
+function routeDetail(r) {
+  const p = r.properties, s = surfOf(r), c = RANK[p.rank - 1], e = fakeElev(r);
+  const stone = s.stone || 0, soil = s.soil || 0;
+  let verdict = "";
+  if (profile === "run" && stone >= 0.3)
+    verdict = `<div class="verdict">Почти треть пути по брусчатке — для бега жёстко.</div>`;
+  else if (soil >= 0.5)
+    verdict = `<div class="verdict ok">Больше половины по грунту — мягко под ногу.</div>`;
+  else if (p.stress_share >= 0.1)
+    verdict = `<div class="verdict">${pct(p.stress_share)} пути вдоль магистралей.</div>`;
+
+  return `<div class="route-body">${verdict}
+    <div class="section" style="margin-top:4px"><h3>Покрытие</h3>${surfaceBlock(s)}</div>
+    <div class="section"><h3>Подробности</h3>
+      <div class="kv"><span>В парке</span><b>${km(p.park_m)}</b></div>
+      <div class="kv"><span>По велодорожкам</span><b>${km(p.bike_m)}</b></div>
+      <div class="kv"><span>Хороших дорожек</span><b>${pct(p.good_share)}</b></div>
+      <div class="kv"><span>Вдоль магистралей</span><b>${pct(p.stress_share)}</b></div>
+      <div class="kv"><span>Повторы пути</span><b>${pct(p.repeat_share)}</b></div>
+    </div>
+    <div class="elev" data-elev="${p.rank}">
+      ${elevSvg(e, 108, 34, c)}
+      <div class="nums">Набор <b>${e.up} м</b><br>Сброс <b>${e.down} м</b></div>
+      <span class="grow">развернуть ↗</span>
+    </div></div>`;
+}
+
+function routesPane() {
+  return `<h2>Маршруты</h2>
+    <div class="sub" style="margin-bottom:11px">Профиль «${profile === "run" ? "Бег" : "Вело"}» —
+      переключается в шапке слева.</div>
+    ${shown().map(routeRow).join("")}`;
+}
+
+function render() {
+  document.getElementById("chrome").innerHTML = `<div class="chrome">
+    <h1>ActiveHabitat</h1><p>Где в Москве удобнее бегать и ездить на велосипеде</p>
+    <div class="segmented">
+      <button class="${profile === "run" ? "on" : ""}" data-profile="run">Бег</button>
+      <button class="${profile === "bike" ? "on" : ""}" data-profile="bike">Вело</button>
+    </div></div>`;
+  document.getElementById("ui").innerHTML = `<div class="panel">
+    <div class="tabs">
+      <button class="tab ${tab === "hex" ? "on" : ""}" data-tab="hex">Гексагон</button>
+      <button class="tab ${tab === "routes" ? "on" : ""}" data-tab="routes">Маршруты (${shown().length})</button>
+    </div>
+    <div class="body">${tab === "hex" ? hexPane() : routesPane()}</div></div>`;
+  renderModal();
+  paintRoutes();
+}
+
+function renderModal() {
+  const host = document.getElementById("modal");
+  if (modalRank == null) { host.innerHTML = ""; return; }
+  const r = shown().find(x => x.properties.rank === modalRank);
+  if (!r) { host.innerHTML = ""; return; }
+  const c = RANK[r.properties.rank - 1], e = fakeElev(r);
+  host.innerHTML = `<div class="modal" data-close="1"><div class="modal-card">
+    <header><h2 style="margin:0">Маршрут ${r.properties.rank} · профиль высоты</h2>
+      <span class="mock">заглушка, рельеф не подключён</span>
+      <button class="close" data-close="1">Закрыть</button></header>
+    ${elevSvg(e, 800, 220, c)}
+    <div class="keys" style="margin-top:10px">
+      <span><span class="dot" style="background:${c}"></span>Набор <b>${e.up} м</b></span>
+      <span><span class="dot" style="background:${c}"></span>Сброс <b>${e.down} м</b></span>
+      <span>Длина <b>${km(r.properties.length_m)}</b></span></div>
+  </div></div>`;
+}
+
+/* ---------- карта ---------- */
+
+function paintRoutes() {
+  if (!map || !map.getSource("proto")) return;
+  map.getSource("proto").setData({ type: "FeatureCollection", features: tab === "routes" ? shown() : [] });
+  // match, а не at по индексу: ["-", ["get","rank"], 1] не проходит типизацию
+  // выражений MapLibre, слой откатывается на чёрный цвет по умолчанию
+  const colorExpr = ["match", ["get", "rank"], 1, RANK[0], 2, RANK[1], 3, RANK[2], 4, RANK[3], RANK[0]];
+  const isSel = ["==", ["get", "rank"], selected == null ? -1 : selected];
+  const some = selected != null;
+  // выбранный не чернеет и не толстеет — он остаётся своим цветом, остальные бледнеют
+  map.setPaintProperty("proto-line", "line-color", colorExpr);
+  map.setPaintProperty("proto-line", "line-width", ["case", isSel, 4.4, some ? 2.2 : 3.4]);
+  map.setPaintProperty("proto-line", "line-opacity", ["case", isSel, 1, some ? 0.28 : 0.92]);
+  map.setPaintProperty("proto-halo", "line-color", colorExpr);
+  map.setPaintProperty("proto-halo", "line-width", ["case", isSel, 13, 0]);
+  map.setPaintProperty("proto-halo", "line-opacity", ["case", isSel, 0.18, 0]);
+}
+
+document.addEventListener("click", ev => {
+  if (ev.target.closest("[data-close]")) { modalRank = null; render(); return; }
+  const t = ev.target.closest("[data-tab],[data-rank],[data-profile],[data-elev]");
+  if (!t) return;
+  if (t.dataset.elev) { modalRank = +t.dataset.elev; render(); return; }
+  if (t.dataset.tab) { tab = t.dataset.tab; }
+  else if (t.dataset.profile) { profile = t.dataset.profile; selected = null; }
+  else if (t.dataset.rank) { const k = +t.dataset.rank; selected = selected === k ? null : k; }
+  render();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { modalRank = null; render(); }
+});
+
+Promise.all([
+  fetch("loops/" + HEX + ".json").then(r => r.json()),
+  fetch("_proto_surface.json").then(r => r.json()),
+  fetch("_hexes.geojson").then(r => r.json())
+]).then(([loops, surf, hexes]) => {
+  routes = loops.features; surface = surf;
+  hexFeat = hexes.features.find(f => f.properties.h3_index === HEX) || null;
+
+  map = new maplibregl.Map({
+    container: "map",
+    style: { version: 8,
+      sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "© OpenStreetMap" } },
+      layers: [{ id: "osm", type: "raster", source: "osm" }] },
+    center: [37.67, 55.79], zoom: 12
+  });
+  map.on("load", () => {
+    if (hexFeat) {
+      map.addSource("hex", { type: "geojson", data: hexFeat });
+      map.addLayer({ id: "hex-fill", type: "fill", source: "hex", paint: { "fill-color": "#1a9850", "fill-opacity": .14 } });
+      // нейтральный тёмный: красный отдан второму маршруту
+      map.addLayer({ id: "hex-line", type: "line", source: "hex", paint: { "line-color": "#374151", "line-width": 2.4 } });
+    }
+    map.addSource("proto", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    map.addLayer({ id: "proto-halo", type: "line", source: "proto",
+      layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-width": 0, "line-opacity": 0 } });
+    map.addLayer({ id: "proto-casing", type: "line", source: "proto",
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: { "line-color": "#fff", "line-width": 7, "line-opacity": .75 } });
+    map.addLayer({ id: "proto-line", type: "line", source: "proto",
+      layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-width": 3.4 } });
+    const b = new maplibregl.LngLatBounds();
+    routes.forEach(r => r.geometry.coordinates.forEach(c => b.extend(c)));
+    map.fitBounds(b, { padding: { top: 40, right: 410, bottom: 60, left: 40 }, duration: 0 });
+    paintRoutes();
+  });
+  render();
+}).catch(e => {
+  document.getElementById("ui").innerHTML =
+    '<div class="panel"><div class="body">Не загрузились данные: ' + e.message +
+    '<br><br>Открывать нужно по http://localhost:8765/prototype_routes.html, не из файла.</div></div>';
+});
+</script>
+</body>
+</html>

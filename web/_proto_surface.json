@@ -1,0 +1,56 @@
+{
+ "8811aa630dfffff|run|1": {
+  "share": {
+   "asphalt": 0.243,
+   "soil": 0.343,
+   "stone": 0.414
+  },
+  "tagged_share": 0.991,
+  "length_m": 4635
+ },
+ "8811aa630dfffff|run|2": {
+  "share": {
+   "asphalt": 0.205,
+   "soil": 0.667,
+   "stone": 0.128
+  },
+  "tagged_share": 0.99,
+  "length_m": 4487
+ },
+ "8811aa6301fffff|run|1": {
+  "share": {
+   "asphalt": 0.388,
+   "soil": 0.409,
+   "stone": 0.204
+  },
+  "tagged_share": 0.994,
+  "length_m": 5028
+ },
+ "8811aa6301fffff|run|2": {
+  "share": {
+   "asphalt": 0.622,
+   "soil": 0.122,
+   "stone": 0.256
+  },
+  "tagged_share": 0.936,
+  "length_m": 5102
+ },
+ "8811aa630dfffff|bike|1": {
+  "share": {
+   "asphalt": 0.593,
+   "soil": 0.327,
+   "stone": 0.08
+  },
+  "tagged_share": 0.94,
+  "length_m": 14617
+ },
+ "8811aa630dfffff|bike|2": {
+  "share": {
+   "asphalt": 0.546,
+   "soil": 0.369,
+   "stone": 0.084
+  },
+  "tagged_share": 0.951,
+  "length_m": 14334
+ }
+}
