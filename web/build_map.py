@@ -773,14 +773,15 @@ def main(out_html: Path | None = None) -> None:
   }
   .ah-sheet-handle {
     display: block;
-    padding: 8px 0 0;
+    padding: 14px 0 12px;
     cursor: grab;
     touch-action: none;
+    flex-shrink: 0;
   }
   .ah-sheet-handle i {
     display: block;
-    width: 42px;
-    height: 4px;
+    width: 48px;
+    height: 5px;
     margin: 0 auto;
     border-radius: 99px;
     background: #d1d5db;
