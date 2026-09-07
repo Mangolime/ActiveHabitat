@@ -711,21 +711,32 @@ def main(out_html: Path | None = None) -> None:
 }
 .ah-elev-card header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   margin-bottom: 10px;
 }
 .ah-elev-card h3 { margin: 0; font-size: 16px; }
-.ah-elev-card .ah-elev-x { margin-left: auto; }
 .ah-elev-full { display: block; width: 100%; height: auto; aspect-ratio: 720 / 148; }
 .ah-elev-close {
   margin-left: auto;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
-  background: #f3f4f6;
-  border-radius: 8px;
+  border-radius: 6px;
+  background: none;
+  color: #6b7280;
+  font-size: 18px;
+  line-height: 1;
   cursor: pointer;
-  font: inherit;
-  padding: 6px 12px;
+  transition: background 0.15s, color 0.15s;
+}
+.ah-elev-close:hover {
+  background: #e5e7eb;
+  color: #0a0a0a;
 }
 @media (max-width: 768px) {
   .ah-chrome {
@@ -743,10 +754,26 @@ def main(out_html: Path | None = None) -> None:
     bottom: 36px;
   }
   .llmaps-legend-toggle-btn { min-width: 44px; min-height: 44px; }
-  .ah-score { font-size: 32px; }
+  .llmaps-sidebar-header {
+    padding: 2px 12px 8px 16px;
+    align-items: center;
+  }
+  .llmaps-sidebar-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .ah-score {
+    font-size: 22px;
+    line-height: 1;
+  }
+  .ah-profile {
+    margin: 0;
+    font-size: 13px;
+  }
   .ah-sheet-handle {
     display: block;
-    padding: 10px 0 2px;
+    padding: 8px 0 0;
     cursor: grab;
     touch-action: none;
   }
@@ -766,7 +793,7 @@ def main(out_html: Path | None = None) -> None:
     right: 0 !important;
     width: 100% !important;
     height: 42vh !important;
-    max-height: 90vh;
+    max-height: 100vh;
     border-radius: 18px 18px 0 0;
     border: 0 !important;
     box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
@@ -1233,7 +1260,7 @@ def main(out_html: Path | None = None) -> None:
     host.className = "ah-elev-modal is-on";
     host.innerHTML = '<div class="ah-elev-card" role="dialog" aria-modal="true">' +
       "<header><h3>Маршрут " + p.rank + " · рельеф</h3>" +
-      '<button type="button" class="ah-elev-close" data-ah-elev-close>Закрыть</button></header>' +
+      '<button type="button" class="ah-elev-close" data-ah-elev-close aria-label="Закрыть" title="Закрыть">&times;</button></header>' +
       elevSvgFull(p, st, c) + elevNums(p, st) + "</div>";
   }
 
@@ -1353,10 +1380,17 @@ def main(out_html: Path | None = None) -> None:
     return window.matchMedia("(max-width: 768px)").matches;
   }
 
+  function setSheetH(sb, px) {
+    var max = window.innerHeight;
+    var next = Math.max(140, Math.min(max, Math.round(px)));
+    // inline !important beats the stylesheet 42vh !important
+    sb.style.setProperty("height", next + "px", "important");
+  }
+
   function syncSheet() {
     var sb = document.getElementById("llmaps-sidebar");
     var open = !!(sb && sb.classList.contains("open"));
-    if (!open && sb) sb.style.height = "";
+    if (!open && sb) sb.style.removeProperty("height");
   }
 
   function ensureSheetHandle(sb) {
@@ -1367,16 +1401,28 @@ def main(out_html: Path | None = None) -> None:
     sb.insertBefore(h, sb.firstChild);
     var startY = 0;
     var startH = 0;
+    var dragged = false;
     h.addEventListener("pointerdown", function (ev) {
       if (!isPhone()) return;
+      dragged = false;
       startY = ev.clientY;
       startH = sb.getBoundingClientRect().height;
       h.setPointerCapture(ev.pointerId);
     });
     h.addEventListener("pointermove", function (ev) {
       if (!h.hasPointerCapture(ev.pointerId)) return;
-      var next = Math.max(140, Math.min(window.innerHeight * 0.9, startH + (startY - ev.clientY)));
-      sb.style.height = next + "px";
+      if (Math.abs(ev.clientY - startY) > 6) dragged = true;
+      setSheetH(sb, startH + (startY - ev.clientY));
+    });
+    h.addEventListener("pointerup", function () {
+      if (!isPhone()) return;
+      var hNow = sb.getBoundingClientRect().height;
+      if (!dragged) {
+        var full = hNow > window.innerHeight * 0.85;
+        setSheetH(sb, full ? window.innerHeight * 0.42 : window.innerHeight);
+      } else if (hNow > window.innerHeight * 0.82) {
+        setSheetH(sb, window.innerHeight);
+      }
     });
   }
 
