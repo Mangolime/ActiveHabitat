@@ -469,7 +469,7 @@ def merge_hex(h3_index: str, profile: str, km: int, new_feats: list, folder: Pat
     path = folder / f"{h3_index}.json"
     old = []
     if path.exists():
-        fc = json.loads(path.read_text(encoding="utf-8"))
+        fc = json.loads(_read_text_retry(path))
         for feat in fc.get("features") or []:
             p = feat.setdefault("properties", {})
             if p.get("km") is None:
@@ -481,14 +481,37 @@ def merge_hex(h3_index: str, profile: str, km: int, new_feats: list, folder: Pat
         g = feat["geometry"]
         g["coordinates"] = [[round(x, 5), round(y, 5)] for x, y in g["coordinates"]]
         feat.setdefault("properties", {})["km"] = int(km)
-    path.write_text(
-        json.dumps(
-            {"type": "FeatureCollection", "features": old + new_feats},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
+    payload = json.dumps(
+        {"type": "FeatureCollection", "features": old + new_feats},
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
+    _write_text_retry(path, payload)
+
+
+def _read_text_retry(path: Path, attempts: int = 8) -> str:
+    last = None
+    for i in range(attempts):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            last = exc
+            time.sleep(0.05 * (2 ** i))
+    raise last
+
+
+def _write_text_retry(path: Path, payload: str, attempts: int = 8) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    last = None
+    for i in range(attempts):
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.05 * (2 ** i))
+    raise last
 
 
 def build_tasks(mode: str, pct: float, km_by_profile: dict[str, list[int]]):
