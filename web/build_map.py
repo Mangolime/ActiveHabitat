@@ -586,6 +586,13 @@ def main(out_html: Path | None = None) -> None:
   padding-right: 0;
   gap: 8px;
 }
+.llmaps-legend-layer-header:hover {
+  background: transparent;
+}
+.llmaps-legend-layer-header,
+.llmaps-layer-toggle {
+  -webkit-tap-highlight-color: transparent;
+}
 .llmaps-legend-item-label {
   flex: 1;
 }
