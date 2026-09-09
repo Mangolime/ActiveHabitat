@@ -25,11 +25,12 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 
 from hex_enrich import (  # noqa: E402
     DATA,
+    ensure_housing_ha,
+    ensure_park_near,
+    ensure_rail_km,
     ensure_road_mix,
     nearby_names,
     nearest_dist,
-    why_bike,
-    why_run,
 )
 
 SOURCE_GEOJSON = DATA / "moscow_h3_scored.geojson"
@@ -54,8 +55,8 @@ ROUTE_KM = {"run": [5, 10, 15], "bike": [10, 20, 30]}
 RDYLGN_RED_LOW_7 = [
     "#d73027",
     "#fc8d59",
-    "#fee08b",
-    "#ffffbf",
+    "#f0b429",  # было #fee08b — жёлтый ближе к янтарному, меньше слива с OSM
+    "#e8d24a",  # было #ffffbf — бледно-жёлтый читался как подложка
     "#d9ef8b",
     "#91cf60",
     "#1a9850",
@@ -196,6 +197,13 @@ def prepare_geojson(src: Path, dest: Path):
     d_shop = nearest_dist(hex_m, shops)
     d_repair = nearest_dist(hex_m, repair)
     mix = ensure_road_mix().set_index("h3_index")
+    rail = ensure_rail_km().set_index("h3_index")
+    try:
+        housing = ensure_housing_ha().set_index("h3_index")
+    except FileNotFoundError as exc:
+        print(f"   ВНИМАНИЕ жильё: {exc}")
+        housing = None
+    park_near = ensure_park_near().set_index("h3_index")
 
     extras = {
         row.h3_index: {
@@ -208,6 +216,10 @@ def prepare_geojson(src: Path, dest: Path):
             "mix_walk_km": float(mix.loc[row.h3_index, "mix_walk_km"]) if row.h3_index in mix.index else 0.0,
             "mix_path_km": float(mix.loc[row.h3_index, "mix_path_km"]) if row.h3_index in mix.index else 0.0,
             "mix_bike_km": float(mix.loc[row.h3_index, "mix_bike_km"]) if row.h3_index in mix.index else 0.0,
+            "rail_km": float(rail.loc[row.h3_index, "rail_km"]) if row.h3_index in rail.index else 0.0,
+            "housing_ha": float(housing.loc[row.h3_index, "housing_ha"]) if housing is not None and row.h3_index in housing.index else 0.0,
+            "has_housing": int(housing.loc[row.h3_index, "has_housing"]) if housing is not None and row.h3_index in housing.index else 0,
+            "park_near": int(park_near.loc[row.h3_index, "park_near"]) if row.h3_index in park_near.index else 0,
         }
         for i, row in enumerate(hexes.itertuples(index=False))
     }
@@ -222,14 +234,10 @@ def prepare_geojson(src: Path, dest: Path):
         run_pct = _pct(p.get("run_friendly_share"))
         low_pct = _pct(p.get("low_stress_share"))
         high_pct = _pct(p.get("high_stress_share"))
-        park_run = float(p.get("park_ha_run") or 0)
-        park_bike = float(p.get("park_ha_bike") or 0)
         props = {
             "h3_index": h3,
             "score_run": int(p["score_run"]),
             "score_bike": int(p["score_bike"]),
-            "why_run": why_run(park_run, run_pct, high_pct),
-            "why_bike": why_bike(park_bike, low_pct, high_pct),
             "parks_near": extra["parks_near"],
             "water_near": extra["water_near"],
             "park_ha_run": _fmt_qty(p.get("park_ha_run"), "га"),
@@ -244,11 +252,26 @@ def prepare_geojson(src: Path, dest: Path):
             "low_stress_pct": _fmt_qty(low_pct, "%", ndigits=0),
             "high_stress_pct": high_pct,
             "bike_infra_km_r": _fmt_qty(p.get("bike_infra_km_r"), "км"),
+            # сырые доли/числа для why-тегов в браузере
+            "run_friendly_share": float(p.get("run_friendly_share") or 0),
+            "low_stress_share": float(p.get("low_stress_share") or 0),
+            "high_stress_share": float(p.get("high_stress_share") or 0),
+            "n_park_ha_run": float(p.get("park_ha_run") or 0),
+            "n_park_ha_bike": float(p.get("park_ha_bike") or 0),
+            "n_dist_park_m": float(p.get("dist_park_m") or 1e6),
+            "n_dist_water_m": float(p.get("dist_water_m") or 1e6),
+            "n_dist_train_m": float(p.get("dist_train_m") or 1e6),
+            "n_bike_infra_km_r": float(p.get("bike_infra_km_r") or 0),
             "mix_magistral_km": extra["mix_magistral_km"],
             "mix_street_km": extra["mix_street_km"],
             "mix_walk_km": extra["mix_walk_km"],
             "mix_path_km": extra["mix_path_km"],
             "mix_bike_km": extra["mix_bike_km"],
+            "rail_km": round(extra["rail_km"], 3),
+            "n_rail_km": float(extra["rail_km"]),
+            "housing_ha": round(extra["housing_ha"], 4),
+            "has_housing": int(extra["has_housing"]),
+            "park_near": int(extra["park_near"]),
         }
         for key, val in p.items():
             if key.startswith("score_") and val is not None:
@@ -256,10 +279,13 @@ def prepare_geojson(src: Path, dest: Path):
                 score_lists.setdefault(key, []).append(float(val))
             elif key.startswith("park_ha_"):
                 props[key] = _fmt_qty(val, "га")
+                props["n_" + key] = float(val or 0)
             elif key.startswith("bike_infra_km_"):
                 props[key] = _fmt_qty(val, "км")
+                props["n_" + key] = float(val or 0)
             elif key.startswith("dist_train_m_"):
                 props[key] = _fmt_dist(val, "нет в радиусе")
+                props["n_" + key] = float(val if val is not None else 1e6)
             elif key.startswith("train_lines_n_"):
                 props[key] = val
         feat["properties"] = props
@@ -284,6 +310,25 @@ def load_weights() -> dict:
     path = ROOT / "pipeline" / "scoring_weights.yaml"
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     return {p: cfg[p]["weights"] for p in ("run", "bike")}
+
+
+def load_why_cfg() -> dict:
+    path = ROOT / "pipeline" / "scoring_weights.yaml"
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return {
+        "run": {
+            "park_ha0_by_km": cfg["run"].get("park_ha0_by_km") or {},
+            "park_ha0": cfg["run"]["park_ha0"],
+        },
+        "bike": {
+            "park_ha0_by_km": cfg["bike"].get("park_ha0_by_km") or {},
+            "park_ha0": cfg["bike"]["park_ha0"],
+            "bike_infra_km0_by_km": cfg["bike"].get("bike_infra_km0_by_km") or {},
+            "bike_infra_km0": cfg["bike"]["bike_infra_km0"],
+            "park_mix": cfg["bike"]["park_mix"],
+            "train_lines_cap": cfg["bike"]["train_lines_cap"],
+        },
+    }
 
 
 def main(out_html: Path | None = None) -> None:
@@ -332,7 +377,7 @@ def main(out_html: Path | None = None) -> None:
     sidebar = Sidebar(
         position="right",
         width=360,
-        title_field="why_run",
+        title_field="h3_index",
         fields_by_layer={LAYER_ID: SIDEBAR_FIELDS},
         field_labels=FIELD_LABELS,
         hide_empty_fields=True,
@@ -362,6 +407,7 @@ def main(out_html: Path | None = None) -> None:
     m.embed_data("rampColors", RDYLGN_RED_LOW_7)
     m.embed_data("kmOptions", {"options": KM_OPTIONS, "default": KM_DEFAULT})
     m.embed_data("routeKm", ROUTE_KM)
+    m.embed_data("whyCfg", load_why_cfg())
     m.embed_data(
         "ramps",
         {key: [[v, c] for v, c in stops] for key, stops in ramps.items()},
@@ -384,7 +430,7 @@ def main(out_html: Path | None = None) -> None:
   top: 12px;
   left: 54px;
   padding: 10px 12px;
-  max-width: 280px;
+  max-width: 320px;
   font-size: 12px;
   color: #111827;
 }
@@ -428,14 +474,16 @@ def main(out_html: Path | None = None) -> None:
 }
 .ah-chips { display: flex; gap: 4px; }
 .ah-chips button {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   font-size: 12px;
-  padding: 5px 0;
+  padding: 5px 6px;
   border-radius: 7px;
   border: 1px solid rgba(229, 231, 235, 0.85);
   background: rgba(255, 255, 255, 0.35);
   color: #111827;
   cursor: pointer;
+  white-space: nowrap;
 }
 .ah-chips button.is-on {
   background: rgba(107, 63, 29, 0.14);
@@ -451,6 +499,140 @@ def main(out_html: Path | None = None) -> None:
   line-height: 1.3;
 }
 .ah-switch input { margin: 0; cursor: pointer; }
+/* Выкл. состояние тогла «Балл района» — заметнее на полупрозрачном фоне. */
+.llmaps-toggle-slider {
+  background-color: #9ca3af;
+  box-shadow: inset 0 0 0 1px rgba(17, 24, 39, 0.22);
+}
+.llmaps-layer-toggle:hover .llmaps-toggle-slider {
+  background-color: #6b7280;
+}
+.ah-filters {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(229, 231, 235, 0.9);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.ah-filters-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(17, 24, 39, 0.55);
+}
+.ah-score-ends {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: rgba(17, 24, 39, 0.55);
+  margin-bottom: 2px;
+}
+.ah-ball-static {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(17, 24, 39, 0.62);
+  letter-spacing: 0.02em;
+}
+.ah-ramp-wrap {
+  position: relative;
+  height: 44px;
+  margin: 0 0 4px;
+  --lo: 0%;
+  --hi: 100%;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ah-ramp-wrap.is-dragging { cursor: grabbing; }
+/* Отступ = радиус бегунка + запас под обводку, иначе .llmaps-legend {overflow:hidden} срезает край. */
+.ah-ramp-inner {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.ah-ramp-full {
+  position: absolute;
+  left: 0; right: 0; top: 10px; height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(to right, #d73027, #fc8d59, #f0b429, #e8d24a, #d9ef8b, #91cf60, #1a9850);
+}
+.ah-ramp-gray-l, .ah-ramp-gray-r {
+  position: absolute; top: 10px; height: 10px;
+  background: #d1d5db;
+  z-index: 1;
+}
+.ah-ramp-gray-l { left: 0; width: var(--lo); border-radius: 5px 0 0 5px; }
+.ah-ramp-gray-r { right: 0; width: calc(100% - var(--hi)); border-radius: 0 5px 5px 0; }
+.ah-thumb {
+  position: absolute;
+  top: 15px;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #6B3F1D;
+  box-shadow: 0 1px 4px rgba(0,0,0,.22);
+  transform: translateY(-50%);
+  z-index: 3;
+}
+.ah-float-val {
+  position: absolute;
+  top: 28px;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(17, 24, 39, 0.55);
+  font-variant-numeric: tabular-nums;
+  z-index: 3;
+  white-space: nowrap;
+}
+.ah-f-check {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 7px 0; font-size: 13px; cursor: pointer; color: #111827;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.ah-f-check input { margin: 2px 0 0; cursor: pointer; flex: none; }
+.ah-f-check.is-hidden { display: none; }
+.ah-f-count {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: rgba(17, 24, 39, 0.55);
+}
+.llmaps-legend-ramp-labels { display: none !important; }
+.llmaps-legend .llmaps-legend-ramp { display: none !important; }
+.llmaps-legend:not(.collapsed) {
+  width: 280px;
+  max-width: 280px;
+  box-sizing: border-box;
+}
+/* Никакой анимации размеров и никакого height на панели —
+   иначе 40px→auto интерполируется к высоте viewport/#map-root. */
+.llmaps-legend {
+  transition: none !important;
+  height: auto !important;
+  max-height: none !important;
+}
+.llmaps-legend.collapsed {
+  height: auto !important;
+  max-height: none !important;
+}
+.llmaps-legend-content {
+  max-width: 100%;
+  box-sizing: border-box;
+}
 .llmaps-sidebar-header {
   align-items: flex-start;
 }
@@ -475,6 +657,10 @@ def main(out_html: Path | None = None) -> None:
   font-size: 13px;
   line-height: 1.4;
   color: #374151;
+}
+.llmaps-sidebar-title .ah-why {
+  flex: 1 0 100%;
+  margin-top: 6px;
 }
 .ah-mix {
   margin: 0 20px 8px;
@@ -794,13 +980,13 @@ def main(out_html: Path | None = None) -> None:
     left: 54px;
     top: 12px;
     bottom: auto;
-    max-width: min(100vw - 24px, 280px);
+    max-width: min(100vw - 24px, 320px);
   }
   .ah-chrome p { display: none; }
   .llmaps-legend {
-    max-width: min(100vw - 24px, 280px);
-    font-size: 12px;
-  }
+  max-width: min(100vw - 24px, 300px);
+  font-size: 12px;
+}
   .llmaps-legend.bottom-left {
     bottom: 36px;
   }
@@ -812,6 +998,7 @@ def main(out_html: Path | None = None) -> None:
   .llmaps-sidebar-title {
     display: flex;
     align-items: baseline;
+    flex-wrap: wrap;
     gap: 8px;
   }
   .ah-score {
@@ -821,6 +1008,10 @@ def main(out_html: Path | None = None) -> None:
   .ah-profile {
     margin: 0;
     font-size: 13px;
+  }
+  .llmaps-sidebar-title .ah-why {
+    margin-top: 4px;
+    font-size: 12px;
   }
   .ah-sheet-handle {
     display: block;
@@ -912,9 +1103,18 @@ def main(out_html: Path | None = None) -> None:
   var currentProfile = "run";
   var currentKm = { run: 5, bike: 20 };
   var wantTrain = false;
+  var filterState = {
+    scoreMin: 0,
+    scoreMax: 100,
+    housing: false,
+    park: false,
+    quiet: false,
+    train: false
+  };
   var lastProps = null;
   var observer = null;
   var hexGeom = null;
+  var hexProps = null;
   var LOOP_HALO = "loops-halo";
   var loopCache = {};
   var loopHex = null;
@@ -967,14 +1167,10 @@ def main(out_html: Path | None = None) -> None:
         (Number(km) === Number(currentKm[currentProfile]) ? ' class="is-on"' : "") +
         ">" + km + " км</button>";
     }).join("");
-    var train = currentProfile === "bike"
-      ? '<label class="ah-switch"><input type="checkbox" data-ah-train' +
-        (wantTrain ? " checked" : "") + '> Нужна электричка</label>'
-      : "";
     box.innerHTML =
       '<div class="ah-opt-row"><span class="ah-opt-cap">Длина маршрута</span>' +
-      '<div class="ah-chips">' + chips + "</div></div>" +
-      (train ? '<div class="ah-opt-row">' + train + "</div>" : "");
+      '<div class="ah-chips">' + chips + "</div></div>";
+    syncFilterTrainRow();
   }
 
   function colorExpr(stops) {
@@ -993,10 +1189,280 @@ def main(out_html: Path | None = None) -> None:
   }
 
   function updateLegend(stops) {
+    // подписи хуже/лучше переехали в блок фильтров
     var minEl = document.querySelector(".llmaps-legend-ramp-min");
     var maxEl = document.querySelector(".llmaps-legend-ramp-max");
     if (minEl) minEl.textContent = Math.round(stops[0][0]) + " · хуже";
     if (maxEl) maxEl.textContent = Math.round(stops[stops.length - 1][0]) + " · лучше";
+    syncFilterRamp();
+  }
+
+  function scoreBounds() {
+    var stops = currentStops() || [];
+    var vals = stops.map(function (s) { return Number(s[0]); }).filter(isFinite);
+    if (!vals.length) return { min: 0, max: 100 };
+    return { min: Math.round(vals[0]), max: Math.round(vals[vals.length - 1]) };
+  }
+
+  function syncFilterTrainRow() {
+    var row = document.getElementById("ah-f-train");
+    if (!row) return;
+    row.classList.toggle("is-hidden", currentProfile !== "bike");
+    if (currentProfile !== "bike") filterState.train = false;
+  }
+
+  function syncFilterRamp() {
+    var wrap = document.getElementById("ah-ramp-wrap");
+    if (!wrap) return;
+    var b = scoreBounds();
+    var span = Math.max(1, b.max - b.min);
+    var loPct = ((filterState.scoreMin - b.min) / span) * 100;
+    var hiPct = ((filterState.scoreMax - b.min) / span) * 100;
+    loPct = Math.max(0, Math.min(100, loPct));
+    hiPct = Math.max(0, Math.min(100, hiPct));
+    wrap.style.setProperty("--lo", loPct + "%");
+    wrap.style.setProperty("--hi", hiPct + "%");
+    var tMin = document.getElementById("ah-thumb-min");
+    var tMax = document.getElementById("ah-thumb-max");
+    var vMin = document.getElementById("ah-val-min");
+    var vMax = document.getElementById("ah-val-max");
+    if (tMin) tMin.style.left = loPct + "%";
+    if (tMax) tMax.style.left = hiPct + "%";
+    // Не даём подписям наезжать друг на друга и вылезать за края (иначе ширина панели пляшет).
+    var minGapPct = 14;
+    var edgePad = 6;
+    var loLab = loPct;
+    var hiLab = hiPct;
+    if (hiLab - loLab < minGapPct) {
+      var mid = (loPct + hiPct) / 2;
+      loLab = mid - minGapPct / 2;
+      hiLab = mid + minGapPct / 2;
+    }
+    loLab = Math.max(edgePad, Math.min(100 - edgePad, loLab));
+    hiLab = Math.max(edgePad, Math.min(100 - edgePad, hiLab));
+    if (hiLab - loLab < minGapPct) {
+      if (loLab <= edgePad) hiLab = Math.min(100 - edgePad, loLab + minGapPct);
+      else if (hiLab >= 100 - edgePad) loLab = Math.max(edgePad, hiLab - minGapPct);
+    }
+    if (vMin) {
+      vMin.style.left = loLab + "%";
+      vMin.textContent = String(filterState.scoreMin);
+    }
+    if (vMax) {
+      vMax.style.left = hiLab + "%";
+      vMax.textContent = String(filterState.scoreMax);
+    }
+  }
+
+  function bindScoreSlider(wrap) {
+    var dragging = null; // "min" | "max"
+    var lastHandle = "max";
+
+    function trackEl() {
+      return wrap.querySelector(".ah-ramp-inner") || wrap;
+    }
+
+    function pctFromEvent(ev) {
+      var rect = trackEl().getBoundingClientRect();
+      if (!rect.width) return 0;
+      return Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+    }
+
+    function valueFromPct(pct) {
+      var b = scoreBounds();
+      return Math.round(b.min + pct * (b.max - b.min));
+    }
+
+    function pickHandle(pct) {
+      var b = scoreBounds();
+      var span = Math.max(1, b.max - b.min);
+      var lo = (filterState.scoreMin - b.min) / span;
+      var hi = (filterState.scoreMax - b.min) / span;
+      var dLo = Math.abs(pct - lo);
+      var dHi = Math.abs(pct - hi);
+      // Наложение: у правого края берём min (чтобы увести влево), у левого — max.
+      if (Math.abs(dLo - dHi) < 0.03) {
+        if (lo >= 0.98 && hi >= 0.98) return "min";
+        if (lo <= 0.02 && hi <= 0.02) return "max";
+        return lastHandle;
+      }
+      return dLo < dHi ? "min" : "max";
+    }
+
+    function applyDrag(ev) {
+      if (!dragging) return;
+      var val = valueFromPct(pctFromEvent(ev));
+      if (dragging === "min") {
+        filterState.scoreMin = Math.min(val, filterState.scoreMax);
+      } else {
+        filterState.scoreMax = Math.max(val, filterState.scoreMin);
+      }
+      lastHandle = dragging;
+      if (window._ahSourceData && window.llmaps_map) applyFilters(window._ahSourceData, window.llmaps_map);
+      else syncFilterRamp();
+    }
+
+    function onPointerDown(ev) {
+      if (ev.button != null && ev.button !== 0) return;
+      dragging = pickHandle(pctFromEvent(ev));
+      lastHandle = dragging;
+      wrap.classList.add("is-dragging");
+      wrap.setPointerCapture(ev.pointerId);
+      applyDrag(ev);
+      ev.preventDefault();
+    }
+
+    function onPointerMove(ev) {
+      if (!dragging) return;
+      applyDrag(ev);
+    }
+
+    function onPointerUp(ev) {
+      if (!dragging) return;
+      dragging = null;
+      wrap.classList.remove("is-dragging");
+      try { wrap.releasePointerCapture(ev.pointerId); } catch (e) {}
+    }
+
+    wrap.addEventListener("pointerdown", onPointerDown);
+    wrap.addEventListener("pointermove", onPointerMove);
+    wrap.addEventListener("pointerup", onPointerUp);
+    wrap.addEventListener("pointercancel", onPointerUp);
+  }
+
+  function ensureFiltersPanel() {
+    var legend = document.querySelector(".llmaps-legend-content");
+    if (!legend || document.getElementById("ah-filters")) return;
+    var box = document.createElement("div");
+    box.id = "ah-filters";
+    box.className = "ah-filters";
+    box.innerHTML =
+      '<div class="ah-filters-title">Фильтры</div>' +
+      '<div class="ah-score-ends"><span>хуже</span><span class="ah-ball-static">балл</span><span>лучше</span></div>' +
+      '<div class="ah-ramp-wrap" id="ah-ramp-wrap" role="group" aria-label="Диапазон балла">' +
+      '<div class="ah-ramp-inner">' +
+      '<div class="ah-ramp-full"></div>' +
+      '<div class="ah-ramp-gray-l"></div>' +
+      '<div class="ah-ramp-gray-r"></div>' +
+      '<div class="ah-thumb" id="ah-thumb-min"></div>' +
+      '<div class="ah-thumb" id="ah-thumb-max"></div>' +
+      '<span class="ah-float-val" id="ah-val-min">0</span>' +
+      '<span class="ah-float-val" id="ah-val-max">100</span>' +
+      "</div></div>" +
+      '<label class="ah-f-check"><input type="checkbox" data-ah-filter="housing">Есть жильё</label>' +
+      '<label class="ah-f-check"><input type="checkbox" data-ah-filter="park">Рядом парк</label>' +
+      '<label class="ah-f-check"><input type="checkbox" data-ah-filter="quiet">Не у магистрали и ж/д</label>' +
+      '<label class="ah-f-check is-hidden" id="ah-f-train">' +
+      '<input type="checkbox" data-ah-filter="train">Недалеко от станции электрички</label>' +
+      '<p class="ah-f-count" id="ah-f-count"></p>';
+    legend.appendChild(box);
+
+    var b = scoreBounds();
+    filterState.scoreMin = b.min;
+    filterState.scoreMax = b.max;
+    syncFilterRamp();
+    syncFilterTrainRow();
+    bindScoreSlider(document.getElementById("ah-ramp-wrap"));
+
+    box.addEventListener("change", function (ev) {
+      var t = ev.target;
+      if (!t || !t.getAttribute("data-ah-filter")) return;
+      filterState[t.getAttribute("data-ah-filter")] = !!t.checked;
+      if (window._ahSourceData && window.llmaps_map) applyFilters(window._ahSourceData, window.llmaps_map);
+    });
+  }
+
+  function hexPassesFilters(props) {
+    if (!props) return true;
+    var field = scoreKey();
+    var score = Number(props[field]);
+    if (!isFinite(score)) score = Number(props[FIELD[currentProfile]]);
+    if (!(score >= filterState.scoreMin && score <= filterState.scoreMax)) return false;
+    if (filterState.housing) {
+      var hh = Number(props.housing_ha || 0);
+      var has = Number(props.has_housing || 0) === 1 || hh >= 0.05;
+      if (!has) return false;
+    }
+    if (filterState.park && Number(props.park_near || 0) !== 1) return false;
+    if (filterState.quiet) {
+      var mag = Number(props.mix_magistral_km || 0);
+      var rail = Number(props.n_rail_km != null ? props.n_rail_km : props.rail_km || 0);
+      if (!(mag < 0.05 && rail < 0.25)) return false;
+    }
+    if (filterState.train && currentProfile === "bike") {
+      var km = currentKm.bike;
+      var d = Number(props["n_dist_train_m_" + km]);
+      if (!isFinite(d)) d = Number(props.n_dist_train_m);
+      // По прямой до станции электрички — до 2 км.
+      if (!(isFinite(d) && d <= 2000)) return false;
+    }
+    return true;
+  }
+
+  function applyFilters(data, map) {
+    ensureFiltersPanel();
+    syncFilterTrainRow();
+    syncFilterRamp();
+    var field = scoreKey();
+    var fallback = FIELD[currentProfile] || FIELD.run;
+    var features = data && data.features ? data.features : [];
+    // полные props из hexProps, если есть
+    var on = 0, total = 0;
+    for (var i = 0; i < features.length; i++) {
+      var f = features[i];
+      var id = f.properties && f.properties.h3_index;
+      if (id == null) continue;
+      total++;
+      var props = (hexProps && hexProps[id]) || f.properties;
+      var val = props[field];
+      if (val == null) val = props[fallback];
+      var pass = hexPassesFilters(props);
+      if (pass) on++;
+      window.llmapsSetFeatureState(SOURCE_ID, id, {
+        active: !!pass,
+        value: val
+      });
+    }
+    if (map && map.getLayer(LAYER_ID)) {
+      map.setPaintProperty(LAYER_ID, "fill-opacity", [
+        "case",
+        ["boolean", ["feature-state", "active"], true],
+        0.42,
+        0
+      ]);
+      if (map.getLayer("hex-fill-outline")) {
+        map.setPaintProperty("hex-fill-outline", "line-opacity", [
+          "case",
+          ["boolean", ["feature-state", "active"], true],
+          0.55,
+          0
+        ]);
+      }
+    }
+    var cnt = document.getElementById("ah-f-count");
+    if (cnt) cnt.textContent = "показано " + on + " из " + total + " гексагонов";
+  }
+
+  function applyView(data, map) {
+    var buttons = document.querySelectorAll("[data-ah-profile]");
+    for (var j = 0; j < buttons.length; j++) {
+      var on = buttons[j].getAttribute("data-ah-profile") === currentProfile;
+      buttons[j].classList.toggle("is-on", on);
+    }
+    renderOpts();
+    applyRamp(map);
+    var b = scoreBounds();
+    if (filterState.scoreMin < b.min) filterState.scoreMin = b.min;
+    if (filterState.scoreMax > b.max) filterState.scoreMax = b.max;
+    if (filterState.scoreMin > filterState.scoreMax) {
+      filterState.scoreMin = b.min;
+      filterState.scoreMax = b.max;
+    }
+    applyFilters(data, map);
+    openRank = null;
+    closeElevModal();
+    drawLoops(map);
+    enhanceSidebar();
   }
 
   function currentStops() {
@@ -1068,9 +1534,217 @@ def main(out_html: Path | None = None) -> None:
     var key = scoreKey();
     var score = lastProps[key] != null ? lastProps[key]
       : (lastProps[FIELD[currentProfile]] != null ? lastProps[FIELD[currentProfile]] : "—");
+    var why = whyLine(Number(score));
     title.innerHTML =
       '<div class="ah-score">' + score + '</div>' +
-      '<div class="ah-profile">' + PROFILE_NAME[currentProfile] + '</div>';
+      '<div class="ah-profile">' + PROFILE_NAME[currentProfile] + '</div>' +
+      (why ? '<div class="ah-why">' + why + "</div>" : "");
+  }
+
+  function whyCfg() {
+    return (window.llmapsData && window.llmapsData.whyCfg) || {
+      run: { park_ha0: 150, park_ha0_by_km: { 5: 150, 10: 600, 15: 1350 } },
+      bike: {
+        park_ha0: 1000,
+        park_ha0_by_km: { 10: 444, 20: 1778, 30: 4000 },
+        bike_infra_km0: 8,
+        bike_infra_km0_by_km: { 10: 3.6, 20: 14.2, 30: 32 },
+        park_mix: { area: 0.5, park_dist: 0.25, water_dist: 0.25 },
+        train_lines_cap: 6
+      }
+    };
+  }
+
+  function whyByKm(map, km, fallback) {
+    if (!map) return fallback;
+    if (map[km] != null) return Number(map[km]);
+    if (map[String(km)] != null) return Number(map[String(km)]);
+    return fallback;
+  }
+
+  function saturate(x, x0) {
+    x = Math.max(0, Number(x) || 0);
+    x0 = Math.max(1e-9, Number(x0) || 1);
+    return 1 - Math.exp(-x / x0);
+  }
+
+  function decay(dist, radius) {
+    return Math.max(0, Math.min(1, 1 - (Number(dist) || 0) / Math.max(1, Number(radius) || 1)));
+  }
+
+  function propNum() {
+    if (!lastProps) return NaN;
+    for (var i = 0; i < arguments.length; i++) {
+      var v = lastProps[arguments[i]];
+      if (v == null || v === "") continue;
+      if (typeof v === "number" && isFinite(v)) return v;
+      var n = parseFloat(String(v).replace(",", ".").replace(/[^\d.eE+-]/g, ""));
+      if (isFinite(n)) return n;
+    }
+    return NaN;
+  }
+
+  // Share fields may arrive as 0–1 or as "41 %"/41 from the sidebar formatters.
+  function shareOf() {
+    for (var i = 0; i < arguments.length; i++) {
+      var v = propNum(arguments[i]);
+      if (!(v >= 0)) continue;
+      return v > 1 ? Math.min(v / 100, 1) : v;
+    }
+    return NaN;
+  }
+
+  function axisTag(f, plusText, minusText) {
+    if (!(f >= 0)) return null;
+    if (f >= 0.63) return { dist: Math.abs(f - 0.5), pol: "+", text: plusText, f: f };
+    if (f <= 0.35) return { dist: Math.abs(f - 0.5), pol: "-", text: minusText, f: f };
+    return null;
+  }
+
+  function isMinusText(text) {
+    return /^(мало |шумные |велодорожек |электрички |ж\/д )/.test(text);
+  }
+
+  function pickWhyTags(axes, low, high) {
+    var active = axes.filter(Boolean).slice().sort(function (a, b) { return b.dist - a.dist; });
+    var pluses = active.filter(function (a) { return a.pol === "+"; });
+    var minuses = active.filter(function (a) { return a.pol === "-"; });
+    var out = [];
+    function push(list) {
+      for (var i = 0; i < list.length && out.length < 3; i++) {
+        if (out.indexOf(list[i].text) === -1) out.push(list[i].text);
+      }
+    }
+    if (low) {
+      push(minuses);
+      push(pluses);
+    } else if (high) {
+      push(pluses);
+      push(minuses);
+    } else {
+      if (pluses.length) out.push(pluses[0].text);
+      if (minuses.length && out.length < 3) out.push(minuses[0].text);
+      push(active);
+    }
+    return out.slice(0, 3);
+  }
+
+  function forceMinusTag(tags, candidates) {
+    if (tags.some(isMinusText)) return tags;
+    candidates = candidates.slice().sort(function (a, b) { return a[0] - b[0]; });
+    if (!candidates.length) return tags;
+    var forced = candidates[0][1];
+    return [forced].concat(tags.filter(function (t) { return t !== forced; })).slice(0, 3);
+  }
+
+  function whyLine(score) {
+    if (!lastProps || !isFinite(score)) return "";
+    var km = Number(currentKm[currentProfile]);
+    var r = (km * 1000) / 4;
+    var cfg = whyCfg();
+    var axes = [];
+    var forceCand = [];
+    if (currentProfile === "run") {
+      var ha0 = whyByKm(cfg.run.park_ha0_by_km, km, cfg.run.park_ha0);
+      var parkHa = propNum("n_park_ha_run_" + km, "n_park_ha_run", "park_ha_run_" + km, "park_ha_run");
+      var dPark = propNum("n_dist_park_m", "dist_park_m");
+      var dWater = propNum("n_dist_water_m", "dist_water_m");
+      var fPark = 0.7 * saturate(parkHa, ha0) + 0.3 * 0.5 * (decay(dPark, r) + decay(dWater, r));
+      var fNet = shareOf("run_friendly_share", "run_friendly_pct");
+      if (!(fNet >= 0)) fNet = 0;
+      var highRun = shareOf("high_stress_share", "high_stress_pct");
+      if (!(highRun >= 0)) highRun = 0;
+      var magRun = propNum("mix_magistral_km");
+      if (!(magRun >= 0)) magRun = 0;
+      var fStress = 1 - highRun;
+      // Visible magistrals must not read as "мало магистралей".
+      if (highRun >= 0.22 || magRun >= 1) fStress = Math.min(fStress, 0.34);
+      axes = [
+        axisTag(fPark, "много парков поблизости", "мало парков поблизости"),
+        axisTag(fNet, "удобные дорожки", "мало дорожек"),
+        axisTag(fStress, "мало магистралей", "шумные магистрали")
+      ];
+      forceCand = [
+        [fPark, "мало парков поблизости"],
+        [fNet, "мало дорожек"],
+        [fStress, "шумные магистрали"]
+      ];
+    } else {
+      var bcfg = cfg.bike;
+      var ha0b = whyByKm(bcfg.park_ha0_by_km, km, bcfg.park_ha0);
+      var infra0 = whyByKm(bcfg.bike_infra_km0_by_km, km, bcfg.bike_infra_km0);
+      var mix = bcfg.park_mix || { area: 0.5, park_dist: 0.25, water_dist: 0.25 };
+      var parkHab = propNum("n_park_ha_bike_" + km, "n_park_ha_bike", "park_ha_bike_" + km, "park_ha_bike");
+      var dParkB = propNum("n_dist_park_m", "dist_park_m");
+      var dWaterB = propNum("n_dist_water_m", "dist_water_m");
+      var fParkB =
+        mix.area * saturate(parkHab, ha0b) +
+        mix.park_dist * decay(dParkB, r) +
+        mix.water_dist * decay(dWaterB, r);
+      var infraKm = propNum(
+        "n_bike_infra_km_" + km, "n_bike_infra_km_r",
+        "bike_infra_km_" + km, "bike_infra_km_r"
+      );
+      if (!(infraKm >= 0)) infraKm = 0;
+      var fInfra = saturate(infraKm, infra0);
+      var low = shareOf("low_stress_share", "low_stress_pct");
+      if (!(low >= 0)) low = 0;
+      var high = shareOf("high_stress_share", "high_stress_pct");
+      if (!(high >= 0)) high = 0;
+      var magKm = propNum("mix_magistral_km");
+      if (!(magKm >= 0)) magKm = 0;
+      var fStreets = (0.2 / 0.36) * low + (0.16 / 0.36) * (1 - high);
+      // Do not praise quiet streets when magistrals dominate the hex.
+      if (high >= 0.22 || magKm >= 1) fStreets = Math.min(fStreets, 0.34);
+      var dTrain = propNum("n_dist_train_m_" + km, "n_dist_train_m", "dist_train_m_" + km, "dist_train_m");
+      var nLines = propNum("train_lines_n_" + km, "train_lines_n");
+      if (!isFinite(nLines)) nLines = 0;
+      var fTr = 0.5 * decay(dTrain, r) + 0.5 * Math.min(nLines / (bcfg.train_lines_cap || 6), 1);
+      var infraAxis = infraKm < 0.05
+        ? { dist: 0.5, pol: "-", text: "велодорожек поблизости нет", f: 0 }
+        : axisTag(fInfra, "много велодорожек поблизости", "мало велодорожек поблизости");
+      var streets = axisTag(fStreets, "спокойные улицы", "шумные магистрали");
+      var parks = axisTag(fParkB, "много парков поблизости", "мало парков поблизости");
+      var trains = axisTag(fTr, "электричка рядом", "электрички далеко");
+      axes = [infraAxis, streets];
+      if (wantTrain) {
+        var third = [parks, trains].filter(Boolean).sort(function (a, b) { return b.dist - a.dist; });
+        if (third.length) axes.push(third[0]);
+      } else if (parks) {
+        axes.push(parks);
+      }
+      forceCand = [
+        [infraKm < 0.05 ? 0 : fInfra, infraKm < 0.05 ? "велодорожек поблизости нет" : "мало велодорожек поблизости"],
+        [fStreets, "шумные магистрали"],
+        [fParkB, "мало парков поблизости"]
+      ];
+      if (wantTrain) forceCand.push([fTr, "электрички далеко"]);
+    }
+    var railKm = propNum("n_rail_km", "rail_km");
+    if (!(railKm >= 0)) railKm = 0;
+    // Только внутри гекса; порог отсекает уголки путей.
+    var railAxis = railKm >= 0.25
+      ? { dist: 0.48, pol: "-", text: "ж/д через район", f: 0 }
+      : null;
+    if (railAxis) {
+      axes.push(railAxis);
+      forceCand.push([0, "ж/д через район"]);
+    }
+    var stops = currentStops() || [];
+    var vals = stops.map(function (s) { return Number(s[0]); }).filter(isFinite);
+    var mid = vals.length ? vals[Math.floor(vals.length / 2)] : 60;
+    var hi = vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * 2 / 3))] : 70;
+    var tags = pickWhyTags(axes, score < mid, score >= hi);
+    if (score < mid) tags = forceMinusTag(tags, forceCand);
+    // Доступ к электричке и «пути режут район» — разные истории; плюс прячет минус.
+    if (tags.indexOf("электричка рядом") !== -1) {
+      tags = tags.filter(function (t) { return t !== "ж/д через район"; });
+    }
+    // «Мало магистралей» рядом с ж/д звучит как ошибка — пути важнее автонуля.
+    if (tags.indexOf("ж/д через район") !== -1) {
+      tags = tags.filter(function (t) { return t !== "мало магистралей"; });
+    }
+    return tags.slice(0, 3).join(" · ");
   }
 
   function fmtKm(value) {
@@ -1589,12 +2263,43 @@ def main(out_html: Path | None = None) -> None:
 
   function indexHexGeom(data) {
     hexGeom = {};
+    hexProps = {};
     var features = data && data.features ? data.features : [];
     for (var i = 0; i < features.length; i++) {
       var f = features[i];
       var id = f.properties && f.properties.h3_index;
-      if (id != null && f.geometry) hexGeom[id] = f.geometry;
+      if (id == null) continue;
+      if (f.geometry) hexGeom[id] = f.geometry;
+      if (f.properties) hexProps[id] = f.properties;
     }
+  }
+
+  // queryRenderedFeatures / LLMaps FileSource drop unused props (n_*, *_share).
+  function resolveHexProps(props) {
+    if (!props) return null;
+    var id = props.h3_index;
+    if (id != null && hexProps && hexProps[id]) return hexProps[id];
+    var data = window._ahSourceData;
+    if (id != null && data && data.features && (!hexProps || !hexProps[id])) {
+      // Prefer already-indexed full props; fall back to stripped source.
+      if (!hexProps) indexHexGeom(data);
+      if (hexProps && hexProps[id]) return hexProps[id];
+    }
+    return props;
+  }
+
+  function loadFullHexProps() {
+    return fetch("_hexes.geojson")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        indexHexGeom(data);
+        if (lastProps && lastProps.h3_index && hexProps[lastProps.h3_index]) {
+          lastProps = hexProps[lastProps.h3_index];
+          enhanceSidebar();
+        }
+        return data;
+      })
+      .catch(function () { return null; });
   }
 
   function outlineGeom(geom) {
@@ -1901,34 +2606,6 @@ def main(out_html: Path | None = None) -> None:
     });
   }
 
-  function applyView(data, map) {
-    var field = scoreKey();
-    var fallback = FIELD[currentProfile] || FIELD.run;
-    var features = data && data.features ? data.features : [];
-    for (var i = 0; i < features.length; i++) {
-      var f = features[i];
-      var id = f.properties && f.properties.h3_index;
-      if (id == null) continue;
-      var val = f.properties[field];
-      if (val == null) val = f.properties[fallback];
-      window.llmapsSetFeatureState(SOURCE_ID, id, {
-        active: true,
-        value: val,
-      });
-    }
-    var buttons = document.querySelectorAll("[data-ah-profile]");
-    for (var j = 0; j < buttons.length; j++) {
-      var on = buttons[j].getAttribute("data-ah-profile") === currentProfile;
-      buttons[j].classList.toggle("is-on", on);
-    }
-    renderOpts();
-    applyRamp(map);
-    openRank = null;
-    closeElevModal();
-    drawLoops(map);
-    enhanceSidebar();
-  }
-
   function applyProfile(profile, data, map) {
     currentProfile = profile || "run";
     applyView(data, map);
@@ -1936,13 +2613,29 @@ def main(out_html: Path | None = None) -> None:
 
   function fadeBasemap(map) {
     try {
-      map.setPaintProperty("llmaps-base", "raster-saturation", -0.12);
-      map.setPaintProperty("llmaps-base", "raster-contrast", -0.04);
-      map.setPaintProperty("llmaps-base", "raster-brightness-max", 0.92);
-      map.setPaintProperty("llmaps-base", "raster-opacity", 0.9);
+      map.setPaintProperty("llmaps-base", "raster-saturation", -0.35);
+      map.setPaintProperty("llmaps-base", "raster-contrast", -0.08);
+      map.setPaintProperty("llmaps-base", "raster-brightness-max", 0.88);
+      map.setPaintProperty("llmaps-base", "raster-opacity", 0.82);
     } catch (e) {}
     if (map.getLayer(LAYER_ID)) {
-      map.setPaintProperty(LAYER_ID, "fill-opacity", 0.36);
+      map.setPaintProperty(LAYER_ID, "fill-opacity", [
+        "case",
+        ["boolean", ["feature-state", "active"], true],
+        0.42,
+        0
+      ]);
+    }
+    if (map.getLayer("hex-fill-outline")) {
+      try {
+        map.setPaintProperty("hex-fill-outline", "line-color", "#5a4a3a");
+        map.setPaintProperty("hex-fill-outline", "line-opacity", [
+          "case",
+          ["boolean", ["feature-state", "active"], true],
+          0.55,
+          0
+        ]);
+      } catch (e2) {}
     }
   }
 
@@ -2062,15 +2755,21 @@ def main(out_html: Path | None = None) -> None:
       });
     }
 
-    map.on("mousemove", LAYER_ID, function () {
-      map.getCanvas().style.cursor = "pointer";
+    map.on("mousemove", LAYER_ID, function (ev) {
+      var feat = ev.features && ev.features[0];
+      var props = feat && feat.properties ? resolveHexProps(feat.properties) : null;
+      var ok = props && hexPassesFilters(props);
+      map.getCanvas().style.cursor = ok ? "pointer" : "";
     });
     map.on("mouseleave", LAYER_ID, function () {
       map.getCanvas().style.cursor = "";
     });
     map.on("click", LAYER_ID, function (ev) {
       var feat = ev.features && ev.features[0];
-      if (feat && feat.properties) lastProps = feat.properties;
+      if (!feat || !feat.properties) return;
+      var props = resolveHexProps(feat.properties);
+      if (!hexPassesFilters(props)) return;
+      lastProps = props;
       setHighlight(map, feat);
       requestAnimationFrame(enhanceSidebar);
     });
@@ -2092,6 +2791,7 @@ def main(out_html: Path | None = None) -> None:
       if (!data) return;
       window._ahSourceData = data;
       indexHexGeom(data);
+      loadFullHexProps();
       var def = kmCfg().default || {};
       currentKm.run = def.run || 5;
       currentKm.bike = def.bike || 20;
@@ -2106,6 +2806,7 @@ def main(out_html: Path | None = None) -> None:
 
     document.addEventListener("change", function (ev) {
       if (ev.target && ev.target.hasAttribute("data-ah-train") && window._ahSourceData) {
+        // legacy: чекбокс убран из шапки; фильтр станции — в блоке «Фильтры»
         wantTrain = !!ev.target.checked;
         applyView(window._ahSourceData, map);
       }
