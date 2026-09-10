@@ -2111,13 +2111,28 @@ def main(out_html: Path | None = None) -> None:
     return ahTab === "routes" && !!loopHex && !routesKnown();
   }
 
+  function orderSidebarBlocks(sidebar) {
+    // Жёсткий порядок: tabs → mix → routes → content («Окружение»).
+    // Иначе при пустом mix routes уезжают в конец, а вкладки — под факты.
+    var content = sidebar.querySelector(".llmaps-sidebar-content");
+    if (!content) return;
+    var blocks = [
+      sidebar.querySelector(".ah-tabs"),
+      sidebar.querySelector(".ah-mix"),
+      sidebar.querySelector(".ah-routes")
+    ];
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i]) sidebar.insertBefore(blocks[i], content);
+    }
+  }
+
   function renderRoutes(sidebar) {
     var box = sidebar.querySelector(".ah-routes");
     if (!box) {
       box = document.createElement("div");
       box.className = "ah-routes";
-      var mix = sidebar.querySelector(".ah-mix");
-      if (mix) sidebar.insertBefore(box, mix);
+      var content = sidebar.querySelector(".llmaps-sidebar-content");
+      if (content) sidebar.insertBefore(box, content);
       else sidebar.appendChild(box);
     }
     var list = loopsForHex();
@@ -2154,15 +2169,13 @@ def main(out_html: Path | None = None) -> None:
     if (!tabs) {
       tabs = document.createElement("div");
       tabs.className = "ah-tabs";
-      var anchor = sidebar.querySelector(".ah-routes") || sidebar.querySelector(".ah-mix") ||
-        sidebar.querySelector(".llmaps-sidebar-content");
-      if (anchor) sidebar.insertBefore(tabs, anchor);
-      else sidebar.appendChild(tabs);
+      sidebar.appendChild(tabs);
     }
     if (!wantRoutesTab()) {
       if (ahTab === "routes") ahTab = "hex";
       tabs.style.display = "none";
       tabs.innerHTML = "";
+      orderSidebarBlocks(sidebar);
       return;
     }
     tabs.style.display = "";
@@ -2172,6 +2185,7 @@ def main(out_html: Path | None = None) -> None:
       '" data-ah-tab="hex">Гексагон</button>' +
       '<button type="button" class="ah-tab' + (ahTab === "routes" ? " is-on" : "") +
       '" data-ah-tab="routes">Маршруты' + (n ? " (" + n + ")" : "") + "</button>";
+    orderSidebarBlocks(sidebar);
   }
 
   function applyTab(sidebar) {
@@ -2246,6 +2260,7 @@ def main(out_html: Path | None = None) -> None:
         ensureSheetHandle(sb);
         renderRoutes(sb);
         renderTabs(sb);
+        orderSidebarBlocks(sb);
         applyTab(sb);
       }
       syncSheet();
